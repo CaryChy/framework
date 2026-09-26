@@ -5,12 +5,13 @@ import (
 
 	"github.com/zeromicro/go-zero/rest/httpx"
 
-	"cari.com.cn/framework/auditlog/server/internal/logic/auditlog"
+	"cari.com.cn/framework/auditlog/server/internal/core"
 	"cari.com.cn/framework/auditlog/server/internal/svc"
 	"cari.com.cn/framework/auditlog/server/internal/types"
 )
 
 // SearchAuditLogsHandler 分页查询审计日志：GET /api/v1/auditlogs。
+// HTTP 与 gRPC 共享 core 层实现，进程内直调（不再经本机 gRPC 回环）。
 func SearchAuditLogsHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.SearchAuditLogsRequest
@@ -19,8 +20,7 @@ func SearchAuditLogsHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		l := auditlog.NewSearchAuditLogsLogic(r.Context(), svcCtx)
-		resp, err := l.SearchAuditLogs(&req)
+		resp, err := core.New(svcCtx).SearchAuditLogsHTTP(r.Context(), &req)
 		if err != nil {
 			httpx.ErrorCtx(r.Context(), w, err)
 		} else {

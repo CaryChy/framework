@@ -4,16 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/zeromicro/go-zero/core/conf"
 	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
-	"github.com/zeromicro/go-zero/zrpc"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"cari.com.cn/framework/auditlog/common/logbridge"
-	tlsutil "cari.com.cn/framework/auditlog/common/tls"
-	pb "cari.com.cn/framework/auditlog/rpc/auditlog"
-
 	"cari.com.cn/framework/auditlog/model"
 	"cari.com.cn/framework/auditlog/server/internal/config"
 	"cari.com.cn/framework/auditlog/server/internal/health"
@@ -26,12 +21,15 @@ const (
 	etcdDialTimeout    = 2 * time.Second
 )
 
-// ServiceContext 组合服务的依赖容器：gRPC 业务层与 HTTP 网关共用。
+// ServiceContext 组合服务的依赖容器：gRPC 与 HTTP 两种协议入口共用。
+//
+// 架构说明：单进程组合服务内，HTTP 入口不再通过 gRPC 回环调用本进程业务逻辑，
+// 而是与 gRPC 入口共享 internal/core 层的同一份实现（见 server/internal/core）。
+// 这消除了双份 logic/mapper、本机 RPC 往返延迟叠加，以及 RpcTLS 回环客户端证书。
 type ServiceContext struct {
 	Config        config.Config
 	Health        *health.Tracker
-	AuditLogModel model.AuditLogModel      // gRPC 业务层：MySQL 数据访问
-	AuditLogRpc   pb.AuditLogServiceClient // HTTP 网关：回环直连本进程 gRPC（mTLS，不经 etcd）
+	AuditLogModel model.AuditLogModel // MySQL 数据访问（core 层使用）
 
 	// 仅供 Stop 时释放的外部资源。
 	etcdCli *clientv3.Client
@@ -40,7 +38,7 @@ type ServiceContext struct {
 // NewServiceContext 初始化公共依赖。
 // 关键约定：MySQL/etcd 等外部依赖连接失败【不会】导致进程退出——
 // 健康追踪器初始状态为 starting，后台 goroutine 周期重试，依赖恢复后自动转 ready，
-// 期间 /readyz 返回 503、业务请求返回 Unavailable。仅配置类错误（如证书文件缺失）才返回错误。
+// 期间 /readyz 返回 503、业务请求返回 Unavailable。仅配置类错误才返回错误。
 func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	tracker := health.NewTracker()
 	svcCtx := &ServiceContext{
@@ -61,7 +59,7 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 	})
 
 	// ---------------- etcd（非必需组件，仅展示状态，不阻断 readiness） ----------------
-	// etcd 故障只影响本服务对【其他服务】的注册可见性，不影响 gRPC 直连与同进程 HTTP 回环，故不阻断 ready。
+	// etcd 故障只影响本服务对【其他服务】的注册可见性，不影响本进程 HTTP/gRPC 双入口，故不阻断 ready。
 	if len(c.Rpc.Etcd.Hosts) > 0 {
 		etcdCli, err := clientv3.New(clientv3.Config{
 			Endpoints:   c.Rpc.Etcd.Hosts,
@@ -81,40 +79,6 @@ func NewServiceContext(c config.Config) (*ServiceContext, error) {
 			return err
 		})
 	}
-
-	// ---------------- HTTP 网关 -> 本进程 gRPC：mTLS 本机直连（不经 etcd） ----------------
-	// 单进程组合服务内回环调用直连 Rpc.ListenOn，避免 etcd 故障时 resolver 地址列表清空导致 HTTP 503；
-	// 外部服务（未来的 auth.rpc 等）仍按标准方式经 etcd 发现。
-	clientOpts := make([]zrpc.ClientOption, 0, 1)
-	if len(c.RpcTLS.CertFile) > 0 && len(c.RpcTLS.KeyFile) > 0 {
-		creds, err := tlsutil.NewClientCredentials(
-			c.RpcTLS.CertFile, c.RpcTLS.KeyFile, c.RpcTLS.CACertFile, c.RpcTLS.ServerName,
-		)
-		if err != nil {
-			return nil, err
-		}
-		clientOpts = append(clientOpts, zrpc.WithTransportCredentials(creds))
-		logx.Infow("HTTP 回环访问本服务 gRPC 已启用 mTLS（本机直连，不经 etcd）",
-			logx.Field("cert", c.RpcTLS.CertFile),
-			logx.Field("server_name", c.RpcTLS.ServerName),
-		)
-	} else {
-		logx.Info("未配置 mTLS 客户端证书，将以明文回环访问本服务 gRPC")
-	}
-
-	// 代码方式构造配置需显式填充默认值（YAML default 标签不生效）。
-	// FillDefault 要求 optional 字段（Target）保持零值，故先填充再覆盖 Target（同 go-zero NewClientWithTarget）。
-	var clientConf zrpc.RpcClientConf
-	if err := conf.FillDefault(&clientConf); err != nil {
-		return nil, err
-	}
-	clientConf.Target = "dns:///" + c.Rpc.ListenOn
-	clientConf.Timeout = c.Rpc.Timeout
-	client, err := zrpc.NewClient(clientConf, clientOpts...)
-	if err != nil {
-		return nil, err
-	}
-	svcCtx.AuditLogRpc = pb.NewAuditLogServiceClient(client.Conn())
 
 	return svcCtx, nil
 }
