@@ -1,0 +1,61 @@
+# auditlog 组合服务配置：单进程同时提供 gRPC 与 HTTP
+# 启动方式（在 auditlog/server 目录下）：go run server.go -f etc/auditlog.yaml
+
+Name: auditlog
+
+# 日志配置：console 输出、json 编码、info 级别
+Log:
+  ServiceName: auditlog
+  Mode: console
+  Encoding: json
+  Level: info
+
+# 本地 MySQL 数据源
+Mysql:
+  DataSource: root:root@tcp(127.0.0.1:3306)/auditlog?charset=utf8mb4&parseTime=true&loc=Local&timeout=3000ms&readTimeout=3000ms&writeTimeout=3000ms
+
+# ---------------- gRPC 服务端 ----------------
+Rpc:
+  ListenOn: 127.0.0.1:9080
+  Timeout: 5000
+  CpuThreshold: 900
+  Health: true
+  # 启动后注册到 etcd，key 为下游服务发现使用的固定标识
+  Etcd:
+    Hosts:
+      - 127.0.0.1:2379
+    Key: auditlog.rpc
+  # gRPC mTLS：CACertFile 非空时强制校验客户端证书（双向认证）；路径相对于 server 工作目录
+  TLS:
+    CertFile: ../deploy/tls/server.pem
+    KeyFile: ../deploy/tls/server-key.pem
+    CACertFile: ../deploy/tls/ca.pem
+
+# ---------------- HTTP 服务端 ----------------
+Http:
+  Host: 127.0.0.1
+  Port: 8080
+  Timeout: 5000
+  MaxConns: 10000
+  # HTTPS 服务端证书；配置后即启用 HTTPS，路径相对于 server 工作目录
+  CertFile: ../deploy/tls/server.pem
+  KeyFile: ../deploy/tls/server-key.pem
+  # 调用方客户端证书 CA：非空时 HTTP 升级为 mTLS（RequireAndVerifyClientCert）
+  ClientCACertFile: ../deploy/tls/ca.pem
+
+# ---------------- 管理端口（明文 HTTP，专供 k8s 探针，不启用 mTLS） ----------------
+# /healthz  liveness：进程存活即 200
+# /readyz   readiness：必需依赖（MySQL）就绪才 200，启动中/依赖故障返回 503
+# /status   状态详情（starting/ready/stopping + 各依赖组件状态）
+# k8s kubelet 探针不携带业务客户端证书，因此该端口必须与 mTLS 业务端口隔离。
+Admin:
+  Host: 127.0.0.1
+  Port: 8081
+
+# ---------------- HTTP 回环 -> gRPC 的 mTLS 客户端证书 ----------------
+# 单进程内 HTTP 直连本机 gRPC（Rpc.ListenOn），不经 etcd；ServerName 需与 server 证书 SAN 匹配。
+RpcTLS:
+  CertFile: ../deploy/tls/client.pem
+  KeyFile: ../deploy/tls/client-key.pem
+  CACertFile: ../deploy/tls/ca.pem
+  ServerName: localhost
