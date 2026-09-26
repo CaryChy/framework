@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package auditlog;
+
+option go_package = "cari.com.cn/framework/auditlog/rpc/auditlog";
+
+// AuditLog 审计日志实体。
+message AuditLog {
+  // 日志主键，UUIDv7，为空时服务端自动生成。
+  string id = 1;
+  // 链路追踪 ID。
+  string trace_id = 2;
+  // 产生日志的服务名。
+  string service_name = 3;
+  // 具体操作（方法/接口路径），如 POST /api/v1/users。
+  string operation = 4;
+  // 操作者 ID。
+  string actor_id = 5;
+  // 操作者类型，如 user / service / admin。
+  string actor_type = 6;
+  // 动作类型，如 CREATE / UPDATE / DELETE / LOGIN / QUERY。
+  string action = 7;
+  // 资源类型，如 order / user。
+  string resource_type = 8;
+  // 资源 ID。
+  string resource_id = 9;
+  // 来源 IP。
+  string source_ip = 10;
+  // User-Agent。
+  string user_agent = 11;
+  // 请求 URI。
+  string request_uri = 12;
+  // 业务状态码。
+  int32 status_code = 13;
+  // 请求体（脱敏后存储）。
+  string request_body = 14;
+  // 响应体（脱敏后存储）。
+  string response_body = 15;
+  // 扩展元数据，JSON 字符串。
+  string metadata = 16;
+  // 错误信息。
+  string error_message = 17;
+  // 耗时（毫秒）。
+  int64 duration_ms = 18;
+  // 创建时间，Unix 毫秒时间戳，由服务端填充。
+  int64 created_at = 19;
+}
+
+// CreateAuditLogsRequest 批量写入审计日志请求，支持一条或多条。
+message CreateAuditLogsRequest {
+  repeated AuditLog logs = 1;
+}
+
+message CreateAuditLogsResponse {
+  // 写入成功的日志 ID 列表，顺序与请求一致。
+  repeated string ids = 1;
+}
+
+// SearchAuditLogsRequest 审计日志分页查询请求，所有过滤条件均可选。
+message SearchAuditLogsRequest {
+  string service_name = 1;
+  string actor_id = 2;
+  string action = 3;
+  string resource_type = 4;
+  string resource_id = 5;
+  string trace_id = 6;
+  // 起始时间，Unix 毫秒。
+  int64 start_time = 7;
+  // 结束时间，Unix 毫秒。
+  int64 end_time = 8;
+  // 页码，从 1 开始，默认 1。
+  int64 page = 9;
+  // 每页大小，默认 20，最大 200。
+  int64 page_size = 10;
+}
+
+message SearchAuditLogsResponse {
+  repeated AuditLog list = 1;
+  int64 total = 2;
+}
+
+service AuditLogService {
+  // CreateAuditLogs 写入一条或多条审计日志。
+  rpc CreateAuditLogs(CreateAuditLogsRequest) returns (CreateAuditLogsResponse);
+  // SearchAuditLogs 按条件分页查询审计日志。
+  rpc SearchAuditLogs(SearchAuditLogsRequest) returns (SearchAuditLogsResponse);
+}
