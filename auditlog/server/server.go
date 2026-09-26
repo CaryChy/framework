@@ -62,9 +62,18 @@ func defaultRestMiddlewares() rest.MiddlewaresConf {
 func main() {
 	flag.Parse()
 
+	// 加载配置：先读取原文并做 ${VAR} 环境变量插值（凭证注入），再解析校验。
+	rawConf, err := config.LoadConfigRaw(*configFile)
+	if err != nil {
+		exitOnErr("读取配置文件失败", err)
+	}
 	var c config.Config
-	if err := conf.Load(*configFile, &c); err != nil {
+	if err := conf.LoadConfigFromYamlBytes(config.ExpandEnv(rawConf), &c); err != nil {
 		exitOnErr("加载配置文件失败", err)
+	}
+	// 配置合法性校验：DSN 缺失、端口冲突、证书只配一半等错误组合直接拒绝启动。
+	if err := c.Validate(); err != nil {
+		exitOnErr("配置校验失败", err)
 	}
 	// 按配置文件初始化日志（级别/编码/输出/保留时长）。
 	if err := logx.SetUp(c.Log); err != nil {
@@ -79,7 +88,7 @@ func main() {
 	// 必须在任何 etcd client（zrpc.NewServer 也会创建）之前设置，client 连接时实时读取该变量。
 	_ = os.Setenv("ETCD_CLIENT_DEBUG", "error")
 
-	// ---------------- 公共依赖：MySQL + gRPC 客户端 ----------------
+	// ---------------- 公共依赖：MySQL + 健康追踪 ----------------
 	// 注意：MySQL/etcd 连接失败不会退出，Health 保持 starting 并后台重试，
 	// 由管理端口 /readyz 对外反映就绪状态。
 	svcCtx, err := svc.NewServiceContext(c)
@@ -119,7 +128,7 @@ func main() {
 		logx.Info("未配置 TLS 证书，gRPC 以明文模式启动")
 	}
 
-	// ---------------- HTTP 网关（HTTPS/mTLS，经 etcd 发现调用 gRPC） ----------------
+	// ---------------- HTTP 入口（HTTPS/mTLS，与 gRPC 共享 core 业务实现） ----------------
 	restConf := rest.RestConf{
 		ServiceConf:  c.ServiceConf,
 		Host:         c.Http.Host,
