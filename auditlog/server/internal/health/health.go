@@ -1,10 +1,10 @@
-// Package health 维护服务与外部依赖（MySQL/etcd 等）的运行时健康状态。
-// 启动阶段依赖连接失败不会导致进程退出：状态保持 starting，后台周期性重试，
-// 依赖恢复后自动转为 ready；状态查询接口（/healthz、/readyz、/status）据此响应。
+// Package health 维护服务与外部依赖（MySQL/etcd）的运行时健康状态：
+// 依赖连接失败不退出进程，保持 starting 并周期重试，恢复后自动转 ready。
 package health
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,8 +99,8 @@ func NewTracker() *Tracker {
 	return t
 }
 
-// AddComponent 注册依赖组件并启动后台探活：注册后立即探一次，之后按 interval 周期重试。
-// required 为 true 的组件决定 readiness；非必需组件（如 etcd）仅在 /status 中展示。
+// AddComponent 注册依赖组件并启动后台探活（注册后立即探一次，之后按 interval 周期重试）。
+// required 组件决定 readiness；非必需组件仅在 /status 展示。
 func (t *Tracker) AddComponent(name string, required bool, interval time.Duration, checker Checker) {
 	c := &component{
 		name:     name,
@@ -124,19 +124,16 @@ func (t *Tracker) MarkStopping() {
 }
 
 // IsReady 是否可接流量：阶段为 ready，且所有必需组件当前健康。
+// 在 RLock 下遍历 map 逐个读组件状态，避免每次调用分配 slice；
+// 锁顺序安全：probe 先释放组件锁再进入 recompute，无循环等待。
 func (t *Tracker) IsReady() bool {
 	if t.phase.Load() != PhaseReady {
 		return false
 	}
 
 	t.mu.RLock()
-	comps := make([]*component, 0, len(t.comps))
+	defer t.mu.RUnlock()
 	for _, c := range t.comps {
-		comps = append(comps, c)
-	}
-	t.mu.RUnlock()
-
-	for _, c := range comps {
 		c.mu.Lock()
 		healthy, checked, required := c.status.Healthy, c.status.Checked, c.required
 		c.mu.Unlock()
@@ -148,23 +145,19 @@ func (t *Tracker) IsReady() bool {
 	return true
 }
 
-// Snapshot 返回当前健康状态快照。
+// Snapshot 返回当前健康状态快照；组件按名称排序，保证输出稳定可对比。
 func (t *Tracker) Snapshot() Snapshot {
 	t.mu.RLock()
-	comps := make([]*component, 0, len(t.comps))
+	statuses := make([]ComponentStatus, 0, len(t.comps))
 	for _, c := range t.comps {
-		comps = append(comps, c)
-	}
-	t.mu.RUnlock()
-
-	now := time.Now()
-	statuses := make([]ComponentStatus, 0, len(comps))
-	for _, c := range comps {
 		c.mu.Lock()
 		statuses = append(statuses, c.status)
 		c.mu.Unlock()
 	}
+	t.mu.RUnlock()
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
 
+	now := time.Now()
 	return Snapshot{
 		Phase:      t.phase.Load().(Phase),
 		Ready:      t.IsReady(),
@@ -242,13 +235,11 @@ func (t *Tracker) probe(c *component) {
 		if c.required {
 			logx.Errorw("依赖连接中断，readiness 已撤销，将持续重试",
 				logx.Field("component", c.name),
-				logx.Field("required", c.required),
 				logx.Field("error", lastErr),
 			)
 		} else {
 			logx.Errorw("非必需依赖连接中断（不影响 readiness），将持续重试",
 				logx.Field("component", c.name),
-				logx.Field("required", c.required),
 				logx.Field("error", lastErr),
 			)
 		}
@@ -260,7 +251,6 @@ func (t *Tracker) probe(c *component) {
 		}
 		logx.Errorw(msg,
 			logx.Field("component", c.name),
-			logx.Field("required", c.required),
 			logx.Field("error", lastErr),
 			logx.Field("retry_interval", c.interval.String()),
 		)
@@ -283,13 +273,8 @@ func (t *Tracker) recompute() {
 	}
 
 	t.mu.RLock()
-	comps := make([]*component, 0, len(t.comps))
+	defer t.mu.RUnlock()
 	for _, c := range t.comps {
-		comps = append(comps, c)
-	}
-	t.mu.RUnlock()
-
-	for _, c := range comps {
 		c.mu.Lock()
 		healthy, checked, required := c.status.Healthy, c.status.Checked, c.required
 		c.mu.Unlock()

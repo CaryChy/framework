@@ -1,0 +1,62 @@
+# golangci-lint 配置：在保证代码质量的同时避免对历史代码过度噪音。
+# 本地运行：golangci-lint run ./...
+# CI 运行：golangci-lint run ./... --timeout=5m
+run:
+  timeout: 5m
+  tests: true
+  # 跳过由 goctl 生成的 RPC 桩代码，其命名/注释不符合常规 lint 规则。
+  skip-dirs:
+    - rpc/auditlog
+
+linters:
+  disable-all: true
+  enable:
+    - gofmt          # 格式检查
+    - goimports      # 导入分组与排序
+    - govet          # go vet 全量检查
+    - errcheck       # 未检查的 error 返回值
+    - ineffassign    # 无效赋值
+    - staticcheck    # SA* 系列静态分析
+    - unused         # 未使用的变量/函数/类型
+    - gosimple       # S* 系列简化建议
+    - misspell       # 拼写错误
+    - unconvert      # 冗余类型转换
+    - typecheck      # 类型检查
+    - revive         # 可配置的代码风格（替代 golint）
+
+linters-settings:
+  goimports:
+    local-prefixes: cari.com.cn/framework
+  misspell:
+    locale: US
+  errcheck:
+    # 忽略类型断言等常见安全忽略场景。
+    check-blank: false
+    exclude-functions:
+      - (io.Closer).Close
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - disable-stuttering-check
+      - name: unused-parameter
+      - name: error-naming
+      - name: error-return
+      - name: error-strings
+        arguments:
+          - "^[a-z]"
+
+issues:
+  exclude-rules:
+    # 测试文件允许下划线命名、导出符号缺注释等。
+    - path: _test\.go
+      linters:
+        - revive
+    # 生成的代码不检查。
+    - path: "rpc/"
+      linters:
+        - staticcheck
+        - unused
+        - gosimple
+  max-issues-per-linter: 0
+  max-same-issues: 0

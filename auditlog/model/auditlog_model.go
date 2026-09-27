@@ -10,8 +10,9 @@ import (
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
 )
 
-// auditLogColumns 审计日志表全字段列，SELECT/INSERT 统一使用，避免漏字段。
-var auditLogColumns = strings.Join([]string{
+// auditLogColumnsList 审计日志表全字段列列表；InsertBatch 占位符数量由 len() 派生，
+// 增删列时只需维护本列表一处。
+var auditLogColumnsList = []string{
 	"`id`",
 	"`trace_id`",
 	"`service_name`",
@@ -31,11 +32,11 @@ var auditLogColumns = strings.Join([]string{
 	"`error_message`",
 	"`duration_ms`",
 	"`created_at`",
-}, ",")
+}
 
-// AuditLog 与 audit_log 表一一对应的实体。
-// NOT NULL 列直接使用标量类型（空值落库为零值/空串），
-// 仅可空的大字段使用 sql.NullString 以写入真正的 NULL。
+var auditLogColumns = strings.Join(auditLogColumnsList, ",")
+
+// AuditLog 与 audit_log 表一一对应的实体；仅可空大字段用 sql.NullString 写入真正的 NULL。
 type AuditLog struct {
 	Id           string         `db:"id"`
 	TraceId      string         `db:"trace_id"`
@@ -100,7 +101,7 @@ func (m *customAuditLogModel) InsertBatch(ctx context.Context, data []*AuditLog)
 		args         []any
 	)
 
-	rowPlaceholder := fmt.Sprintf("(%s)", strings.TrimSuffix(strings.Repeat("?,", 19), ","))
+	rowPlaceholder := fmt.Sprintf("(%s)", strings.TrimSuffix(strings.Repeat("?,", len(auditLogColumnsList)), ","))
 	for _, row := range data {
 		placeholders = append(placeholders, rowPlaceholder)
 		args = append(args,
@@ -148,21 +149,14 @@ func (m *customAuditLogModel) Search(ctx context.Context, in SearchInput) ([]*Au
 		return nil, 0, nil
 	}
 
-	page := in.Page
-	if page <= 0 {
-		page = 1
-	}
-	pageSize := in.PageSize
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-
+	// 分页默认值与边界由 biz 层统一保证，model 层不重复处理。
 	listQuery := fmt.Sprintf(
 		"SELECT %s FROM `audit_log`%s ORDER BY `created_at` DESC, `id` DESC LIMIT ?, ?",
 		auditLogColumns,
 		whereClause,
 	)
-	queryArgs := append(args, (page-1)*pageSize, pageSize)
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, (in.Page-1)*in.PageSize, in.PageSize)
 
 	var list []*AuditLog
 	if err := m.conn.QueryRowsCtx(ctx, &list, listQuery, queryArgs...); err != nil {

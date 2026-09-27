@@ -4,7 +4,7 @@ import (
 	"context"
 
 	pb "cari.com.cn/framework/auditlog/rpc/auditlog"
-	"cari.com.cn/framework/auditlog/server/internal/logic"
+	"cari.com.cn/framework/auditlog/server/internal/logic/rpclogic"
 	"cari.com.cn/framework/auditlog/server/internal/svc"
 )
 
@@ -21,10 +21,10 @@ func NewAuditLogServer(svcCtx *svc.ServiceContext) *AuditLogServer {
 
 // CreateAuditLogs 写入一条或多条审计日志。
 func (s *AuditLogServer) CreateAuditLogs(ctx context.Context, in *pb.CreateAuditLogsRequest) (*pb.CreateAuditLogsResponse, error) {
-	return logic.NewCreateAuditLogsLogic(ctx, s.svcCtx).CreateAuditLogs(in)
+	return rpclogic.NewCreateAuditLogsLogic(ctx, s.svcCtx).CreateAuditLogs(in)
 }
 
 // SearchAuditLogs 分页查询审计日志。
 func (s *AuditLogServer) SearchAuditLogs(ctx context.Context, in *pb.SearchAuditLogsRequest) (*pb.SearchAuditLogsResponse, error) {
-	return logic.NewSearchAuditLogsLogic(ctx, s.svcCtx).SearchAuditLogs(in)
+	return rpclogic.NewSearchAuditLogsLogic(ctx, s.svcCtx).SearchAuditLogs(in)
 }

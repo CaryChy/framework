@@ -1,5 +1,5 @@
 # auditlog 组合服务配置：单进程同时提供 gRPC 与 HTTP
-# 启动方式（在 auditlog/server 目录下）：go run server.go -f etc/auditlog.yaml
+# 启动方式（在 auditlog/server 目录下）：go run . -f etc/auditlog.yaml
 
 Name: auditlog
 
@@ -10,16 +10,27 @@ Log:
   Encoding: json
   Level: info
 
-# 本地 MySQL 数据源
+# 本地 MySQL 数据源。
+# 安全约定：账号密码【不写死在配置文件】，从环境变量注入，go-zero conf.Load 会展开 ${VAR}。
+# 启动前需设置，例如：
+#   export AUDITLOG_DB_USER=auditlog
+#   export AUDITLOG_DB_PASSWORD='your-strong-password'
 Mysql:
-  DataSource: root:root@tcp(127.0.0.1:3306)/auditlog?charset=utf8mb4&parseTime=true&loc=Local&timeout=3000ms&readTimeout=3000ms&writeTimeout=3000ms
+  DataSource: ${AUDITLOG_DB_USER}:${AUDITLOG_DB_PASSWORD}@tcp(${AUDITLOG_DB_HOST}:${AUDITLOG_DB_PORT})/${AUDITLOG_DB_NAME}?charset=utf8mb4&parseTime=true&loc=Local&timeout=3000ms&readTimeout=3000ms&writeTimeout=3000ms
+  # 连接池参数（均可选，<=0 表示使用 go-zero/database/sql 默认值）：
+  # MaxOpenConns: 100       # 最大打开连接数
+  # MaxIdleConns: 20        # 最大空闲连接数；<=0 时取 MaxOpenConns
+  # ConnMaxLifetime: 1800000  # 连接最大存活时长（毫秒），30 分钟
+  # ConnMaxIdleTime: 600000   # 连接最大空闲时长（毫秒），10 分钟
 
 # ---------------- gRPC 服务端 ----------------
 Rpc:
-  ListenOn: 127.0.0.1:9080
+  ListenOn: 127.0.0.1:9083
   Timeout: 5000
   CpuThreshold: 900
   Health: true
+  # 全局限流（请求/秒，单实例内存令牌桶，突发=1 秒量）；0 表示不限流
+  RateLimit: 2000
   # 启动后注册到 etcd，key 为下游服务发现使用的固定标识
   Etcd:
     Hosts:
@@ -30,32 +41,49 @@ Rpc:
     CertFile: ../deploy/tls/server.pem
     KeyFile: ../deploy/tls/server-key.pem
     CACertFile: ../deploy/tls/ca.pem
+    # 调用方身份校验（SPIFFE URI SAN，见《服务身份认证与服务间安全通信方案》§14.1）：
+    # 证书链（Root）由 TLS 必验；组织/项目不在这里配置——启动时自动从上面 server.pem
+    # 的 SPIFFE URI（spiffe://cari/platform/framework/auditlog）派生，调用方必须同组织、
+    # 同项目；Business System / Service 白名单留空表示同组织同项目内不限制（可选）。
+    ClientIdentity:
+      AllowedBusinessSystems:
+        - framework
+      # AllowedServices:
 
 # ---------------- HTTP 服务端 ----------------
 Http:
   Host: 127.0.0.1
-  Port: 8080
+  Port: 8083
   Timeout: 5000
   MaxConns: 10000
+  # 全局限流（请求/秒，单实例内存令牌桶，突发=1 秒量）；0 表示不限流
+  RateLimit: 1000
+  # HTTP 服务注册到 etcd（key 独立，与 gRPC 不冲突）；服务就绪后才会发布
+  Etcd:
+    Hosts:
+      - 127.0.0.1:2379
+    Key: auditlog.http
+  # 发布到 etcd 的地址；留空取 Host。Host 为 0.0.0.0 时必须显式配置为实例可达 IP/域名
+  # AdvertiseHost: 10.0.0.8
   # HTTPS 服务端证书；配置后即启用 HTTPS，路径相对于 server 工作目录
   CertFile: ../deploy/tls/server.pem
   KeyFile: ../deploy/tls/server-key.pem
   # 调用方客户端证书 CA：非空时 HTTP 升级为 mTLS（RequireAndVerifyClientCert）
   ClientCACertFile: ../deploy/tls/ca.pem
+  # 调用方身份校验，与 gRPC 端口策略保持一致：组织/项目基准启动时从本服务证书
+  # SPIFFE URI 派生，调用方须同组织同项目；业务系统限 framework，留空项不校验。
+  ClientIdentity:
+    AllowedBusinessSystems:
+      - framework
+    # AllowedServices:
 
-# ---------------- 管理端口（明文 HTTP，专供 k8s 探针，不启用 mTLS） ----------------
-# /healthz  liveness：进程存活即 200
-# /readyz   readiness：必需依赖（MySQL）就绪才 200，启动中/依赖故障返回 503
-# /status   状态详情（starting/ready/stopping + 各依赖组件状态）
+# ---------------- 管理端口（明文 HTTP，供 k8s 探针，无 mTLS） ----------------
+# /healthz  liveness：进程存活即 200，恒开放
+# /readyz   readiness：必需依赖（MySQL）就绪才 200，启动中/依赖故障返回 503，恒开放
+# /status   状态详情（starting/ready/stopping + 各依赖组件状态），配置 StatusToken 后需 Bearer 鉴权
 # k8s kubelet 探针不携带业务客户端证书，因此该端口必须与 mTLS 业务端口隔离。
 Admin:
   Host: 127.0.0.1
-  Port: 8081
-
-# ---------------- HTTP 回环 -> gRPC 的 mTLS 客户端证书 ----------------
-# 单进程内 HTTP 直连本机 gRPC（Rpc.ListenOn），不经 etcd；ServerName 需与 server 证书 SAN 匹配。
-RpcTLS:
-  CertFile: ../deploy/tls/client.pem
-  KeyFile: ../deploy/tls/client-key.pem
-  CACertFile: ../deploy/tls/ca.pem
-  ServerName: localhost
+  Port: 8084
+  # 访问 /status 的 Bearer 令牌，经环境变量注入；留空则不鉴权（仅限受信内网）
+  StatusToken: ${AUDITLOG_ADMIN_TOKEN}

@@ -1,0 +1,38 @@
+# ---- 编译产物 ----
+/server
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+
+# ---- 证书与私钥（绝不入库，由 gen.sh 本地生成）----
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+
+# ---- 本地配置（含密码等敏感信息）----
+*.local.yaml
+*.local.yml
+.env
+.env.*
+
+# ---- 日志与临时文件 ----
+*.log
+/tmp/
+/logs/
+
+# ---- IDE / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# ---- 依赖与缓存 ----
+/vendor/

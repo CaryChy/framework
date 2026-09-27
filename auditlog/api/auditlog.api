@@ -9,27 +9,27 @@ info (
 
 type (
 	// AuditLogItem 审计日志条目，字段与 gRPC/AuditLog 保持一致。
-	AuditLogItem {
-		Id           string `json:"id,optional"`
-		TraceId      string `json:"trace_id,optional"`
-		ServiceName  string `json:"service_name"`
-		Operation    string `json:"operation,optional"`
-		ActorId      string `json:"actor_id,optional"`
-		ActorType    string `json:"actor_type,optional"`
-		Action       string `json:"action,optional"`
-		ResourceType string `json:"resource_type,optional"`
-		ResourceId   string `json:"resource_id,optional"`
-		SourceIp     string `json:"source_ip,optional"`
-		UserAgent    string `json:"user_agent,optional"`
-		RequestUri   string `json:"request_uri,optional"`
-		StatusCode   int32  `json:"status_code,optional"`
-		RequestBody  string `json:"request_body,optional"`
-		ResponseBody string `json:"response_body,optional"`
-		Metadata     string `json:"metadata,optional"`
-		ErrorMessage string `json:"error_message,optional"`
-		DurationMs   int64  `json:"duration_ms,optional"`
-		CreatedAt    int64  `json:"created_at,optional"`
-	}
+		AuditLogItem {
+			Id           string `json:"id,optional,omitempty"`
+			TraceId      string `json:"trace_id,optional,omitempty"`
+			ServiceName  string `json:"service_name,optional,omitempty"`
+			Operation    string `json:"operation,optional,omitempty"`
+			ActorId      string `json:"actor_id,optional,omitempty"`
+			ActorType    string `json:"actor_type,optional,omitempty"`
+			Action       string `json:"action,optional,omitempty"`
+			ResourceType string `json:"resource_type,optional,omitempty"`
+			ResourceId   string `json:"resource_id,optional,omitempty"`
+			SourceIp     string `json:"source_ip,optional,omitempty"`
+			UserAgent    string `json:"user_agent,optional,omitempty"`
+			RequestUri   string `json:"request_uri,optional,omitempty"`
+			StatusCode   int32  `json:"status_code,optional"`
+			RequestBody  string `json:"request_body,optional,omitempty"`
+			ResponseBody string `json:"response_body,optional,omitempty"`
+			Metadata     string `json:"metadata,optional,omitempty"`
+			ErrorMessage string `json:"error_message,optional,omitempty"`
+			DurationMs   int64  `json:"duration_ms,optional"`
+			CreatedAt    int64  `json:"created_at,optional"`
+		}
 
 	// CreateAuditLogsRequest 批量写入请求，logs 支持一条或多条。
 	CreateAuditLogsRequest {

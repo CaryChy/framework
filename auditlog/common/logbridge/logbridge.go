@@ -11,9 +11,7 @@ import (
 )
 
 // NewEtcdLogger 构造一个写入 logx 的 zap.Logger，供 clientv3.Config.Logger 使用。
-// 最低输出级别为 Warn：过滤 etcd client 底层高频的 retrying info 噪音（连通性观测已由
-// 健康追踪器的结构化日志承担），仅保留 warn/error 作为补充。
-// logger 名称（etcd-client）与调用位置会作为字段一并输出，方便区分日志来源。
+// 最低级别 Warn：过滤 etcd client 高频的 retrying info 噪音（连通性观测由健康追踪器承担）。
 func NewEtcdLogger() *zap.Logger {
 	return zap.New(
 		&core{enab: zap.NewAtomicLevelAt(zapcore.WarnLevel)},
@@ -23,34 +21,47 @@ func NewEtcdLogger() *zap.Logger {
 
 // core 实现 zapcore.Core，将每条日志转发给 logx。
 type core struct {
-	enab zapcore.LevelEnabler
+	enab   zapcore.LevelEnabler
+	fields []zapcore.Field // With 累积的上下文字段
 }
 
 func (c *core) Enabled(lvl zapcore.Level) bool { return c.enab.Enabled(lvl) }
 
-func (c *core) With([]zapcore.Field) zapcore.Core { return c }
+// With 返回携带新增上下文字段的新 core，保证 zap.With 注入的字段（如 component 名）不丢失。
+func (c *core) With(fields []zapcore.Field) zapcore.Core {
+	merged := make([]zapcore.Field, 0, len(c.fields)+len(fields))
+	merged = append(merged, c.fields...)
+	merged = append(merged, fields...)
+	return &core{enab: c.enab, fields: merged}
+}
 
 func (c *core) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
 	return ce.AddCore(ent, c)
 }
 
 func (c *core) Write(ent zapcore.Entry, fields []zapcore.Field) error {
-	logFields := make([]logx.LogField, 0, len(fields)+2)
+	all := make([]zapcore.Field, 0, len(c.fields)+len(fields))
+	all = append(all, c.fields...)
+	all = append(all, fields...)
+
+	logFields := make([]logx.LogField, 0, len(all)+2)
 	if len(ent.LoggerName) > 0 {
 		logFields = append(logFields, logx.Field("logger", ent.LoggerName))
 	}
 	if ent.Caller.Defined {
 		logFields = append(logFields, logx.Field("source", ent.Caller.TrimmedPath()))
 	}
-	for _, f := range fields {
+	for _, f := range all {
 		logFields = append(logFields, toLogxField(f))
 	}
 
+	// logx 无独立 Warn 级别：第三方 warn（如重试失败）按 Infow 输出并标注 level=warn，
+	// 避免误入慢日志流（Sloww 是慢日志语义，并非 warn）。
 	switch {
 	case ent.Level >= zapcore.ErrorLevel:
 		logx.Errorw(ent.Message, logFields...)
 	case ent.Level == zapcore.WarnLevel:
-		logx.Sloww(ent.Message, logFields...)
+		logx.Infow(ent.Message, append(logFields, logx.Field("level", "warn"))...)
 	default:
 		logx.Infow(ent.Message, logFields...)
 	}
